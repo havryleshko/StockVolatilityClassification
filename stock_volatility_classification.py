@@ -1,98 +1,115 @@
-import sklearn
+import warnings
 import pandas as pd
-import numpy as np
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix
 import matplotlib.pyplot as plt
-from sklearn.model_selection import TimeSeriesSplit
+import numpy as np
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, cross_val_score
 
 df = pd.read_csv('/Users/ohavryleshko/Documents/GitHub/Kaggle datasets/15 Years Stock Data of NVDA AAPL MSFT GOOGL and AMZN.csv')
-print(df.columns)
+print('Begin the operation...')
+df['Date'] = pd.to_datetime(df['Date'])
+df.set_index('Date', inplace=True)
 
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.model_selection import GridSearchCV
+# cleaning data
+warnings.filterwarnings("ignore")
+# print(df.head())
+# print(df.isna().sum())
+df.dropna(inplace=True)
 
-def stock_iteration_gb(df, stock):
-    print('Initialising the function...',)
-    df = df.copy()
-    df[f'Volatility_{stock}'] = df[f'High_{stock}'] - df[f'Low_{stock}']
-    median = df[f'Volatility_{stock}'].median()
-    df[f'Volatility_{stock}'] = (df[f'Volatility_{stock}'] > median).astype(int)
-    #feature engineering part
-    # lagged features
-    df[f'Prev_volatility_{stock}'] = df[f'Volatility_{stock}'].shift(1)
-    df[f'Prev_closing_{stock}'] = df[f'Close_{stock}'].shift(1)
+# EDA, data visualization
+#print('Summary statistics:')
+#print(df.describe())
 
-     # moving averages
-    df[f'MA_5_{stock}'] = df[f'Close_{stock}'].rolling(window=5).mean()
-    df[f'MA_10_{stock}'] = df[f'Close_{stock}'].rolling(window=10).mean()
-
-    # price change in return 
-    df[f'Return_{stock}'] = df[f'Close_{stock}'].pct_change()
-
-    #compute_rolling_volatility
-    df[f'Rolling_volatility_{stock}'] = df[f'Return_{stock}'].rolling(window=5).std()
-
-    df = df.dropna()
-
-    y = df[f'Volatility_{stock}']
-    X = df[[f'Prev_volatility_{stock}', f'Prev_closing_{stock}', f'MA_5_{stock}', f'Return_{stock}', f'Rolling_volatility_{stock}']]
-
-    #train_test_split set 
-    X_train, X_test, y_train, y_test  = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    #creating a Decision Tree model and fitting it
-    gb = GradientBoostingClassifier()
-    gb.fit(X_train, y_train)
-
-    train_accuracy = gb.score(X_train, y_train)
-    print(f'Accuracy score for training dataset: {train_accuracy}')
-
-    test_accuracy = gb.score(X_test, y_test)
-    print(f'Accuracy for test dataset: {test_accuracy}')
-
-    #evaluation
-    y_pred = gb.predict(X_test)
-    print(accuracy_score(y_pred, y_test))
-    print(confusion_matrix(y_pred, y_test))
-    
-    param_grid = {
-        'n_estimators': [100, 200],
-        'learning_rate': [0.1, 0.05],
-        'max_depth': [2, 3],
-    }
-
-    gs = GridSearchCV(gb, param_grid, cv=5, scoring='f1')
-    gs.fit(X_train, y_train)
-
-    print(f'Best parameters are: {gs.best_params_}')
-    best_model = gs.best_estimator_
-    print(best_model)
-
-    y_pred = best_model.predict(X_test)
-    print(accuracy_score(y_pred, y_test))
-    print(confusion_matrix(y_pred, y_test))
-
-    from sklearn.metrics import classification_report
-    print(classification_report(y_pred, y_test))
-
-    tscv = TimeSeriesSplit(n_splits=5)
-    for train_index, test_index in tscv.split(df):
-        print(train_index, test_index)
-
-    from sklearn.model_selection import learning_curve
-    train_size, train_score, test_score = learning_curve(gb, X, y, cv=5)
-    train_mean = train_score.mean(axis=1)
-    test_mean = test_score.mean(axis=1)
-
-    plt.plot(train_size, train_mean, label='Training acc')
-    plt.plot(train_size, test_mean, label='Test acc')
-    plt.xlabel('Training size')
-    plt.ylabel('Acc')
-    plt.title('learning curve')
-    plt.legend()
+# correlation heatmap
+numeric_df = df.select_dtypes(include=[np.number])
+if numeric_df.shape[1] > 4:
+    plt.figure(figsize=(10, 8))
+    corr = numeric_df.corr()
+    sns.heatmap(corr, annot=True, cmap='coolwarm')
+    plt.title('Heatmap')
     plt.show()
+print('EDA and data analsis complete')
 
-for stock in ['AAPL', 'AMZN', 'MSFT', 'NVDA', 'GOOGL']:
-    stock_iteration_gb(df, stock)
+print('Engineering features...')
+# daily return
+df['Daily_return'] = df['Close_MSFT'].pct_change()
+df.dropna(subset=['Daily_return'], inplace=True)
+
+#rolling volatility
+win_size = 20
+df['Rolling_volatility'] = df['Daily_return'].rolling(window=win_size).std()
+
+# threshold for volatility
+threshold = df['Rolling_volatility'].quantile(0.75)
+df['Volatility'] = (df['Rolling_volatility'] >threshold).astype(int)
+
+# 5-day moving acerage
+MA_win_size = [5, 10, 20]
+for size in MA_win_size:
+    df[f'MA_{size}'] = df['Close_MSFT'].rolling(window=size).mean()
+
+# lagged features
+df[f'Prev_volatility'] = df[f'Volatility'].shift(1)
+df[f'Prev_close'] = df[f'Close_MSFT'].shift(1)
+df.dropna(subset=['Prev_volatility', 'Prev_close'], inplace=True)
+print('Feature engineering complete')
+
+print('Begin train & test split...')
+# scaling and splitting data with time-based split
+features = ['MA_5', 'MA_10', 'MA_20', 'Prev_volatility', 'Prev_close']
+X = df[features]
+y = df['Volatility']
+
+ratio = 0.8
+split_index = int(len(df) * ratio)
+
+X_train = X.iloc[:split_index]
+X_test = X.iloc[split_index:]
+y_train = y.iloc[:split_index]
+y_test = y.iloc[split_index:]
+
+# scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# model training and fitting
+rfc = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=10,
+    random_state=42,
+)
+rfc.fit(X_train_scaled, y_train)
+y_pred = rfc.predict(X_test)
+print('Model training complete')
+
+print('Begin model evaluation...')
+# model evaluation
+print(f'Classification report:', classification_report(y_test, y_pred))
+print(f'Confusion matrix:', confusion_matrix(y_test, y_pred))
+
+# time series cross-validation
+tscv = TimeSeriesSplit(n_splits=5)
+cross_val_scores = cross_val_score(rfc, X_train, y_train, cv=tscv)
+print(f'CV scores:', cross_val_scores)
+
+#hyperparameters
+param_grid = {
+    'n_estimators': [50, 100],
+    'max_depth': [5, 10],
+    'min_samples_split': [2, 3],
+}
+
+gs = GridSearchCV(rfc, param_grid, cv=tscv, scoring='accuracy')
+gs.fit(X_train_scaled, y_train)
+best_model = gs.best_estimator_
+print(f'Best parameters:', gs.best_params_)
+print(f'Best score:', gs.best_score_)
+y_pred_best = best_model.predict(X_test)
+
+print(f'Best classification report:', classification_report(y_test, y_pred_best))
+print(f'Best confusion matrix:', confusion_matrix(y_test, y_pred_best))
+print('Evaluationa & tuning complete')
