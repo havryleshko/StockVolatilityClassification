@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, cross_val_score
 
+
 df = pd.read_csv('/Users/ohavryleshko/Documents/GitHub/Kaggle datasets/15 Years Stock Data of NVDA AAPL MSFT GOOGL and AMZN.csv')
 print('Begin the operation...')
 df['Date'] = pd.to_datetime(df['Date'])
@@ -15,13 +16,13 @@ df.set_index('Date', inplace=True)
 
 # cleaning data
 warnings.filterwarnings("ignore")
-# print(df.head())
-# print(df.isna().sum())
+print(df.head())
+print(df.isna().sum())
 df.dropna(inplace=True)
 
 # EDA, data visualization
-#print('Summary statistics:')
-#print(df.describe())
+print('Summary statistics:')
+print(df.describe())
 
 # correlation heatmap
 numeric_df = df.select_dtypes(include=[np.number])
@@ -43,10 +44,10 @@ win_size = 20
 df['Rolling_volatility'] = df['Daily_return'].rolling(window=win_size).std()
 
 # threshold for volatility
-threshold = df['Rolling_volatility'].quantile(0.75)
+threshold = df['Rolling_volatility'].quantile(0.55)
 df['Volatility'] = (df['Rolling_volatility'] >threshold).astype(int)
 
-# 5-day moving acerage
+# 5-day moving average
 MA_win_size = [5, 10, 20]
 for size in MA_win_size:
     df[f'MA_{size}'] = df['Close_MSFT'].rolling(window=size).mean()
@@ -81,9 +82,10 @@ rfc = RandomForestClassifier(
     n_estimators=100,
     max_depth=10,
     random_state=42,
+    class_weight='balanced',
 )
 rfc.fit(X_train_scaled, y_train)
-y_pred = rfc.predict(X_test)
+y_pred = rfc.predict(X_test_scaled)
 print('Model training complete')
 
 print('Begin model evaluation...')
@@ -93,7 +95,7 @@ print(f'Confusion matrix:', confusion_matrix(y_test, y_pred))
 
 # time series cross-validation
 tscv = TimeSeriesSplit(n_splits=5)
-cross_val_scores = cross_val_score(rfc, X_train, y_train, cv=tscv)
+cross_val_scores = cross_val_score(rfc, X_train_scaled, y_train, cv=tscv)
 print(f'CV scores:', cross_val_scores)
 
 #hyperparameters
@@ -103,7 +105,7 @@ param_grid = {
     'min_samples_split': [2, 3],
 }
 
-gs = GridSearchCV(rfc, param_grid, cv=tscv, scoring='accuracy')
+gs = GridSearchCV(rfc, param_grid, cv=tscv, scoring='f1_macro', n_jobs=-1)
 gs.fit(X_train_scaled, y_train)
 best_model = gs.best_estimator_
 print(f'Best parameters:', gs.best_params_)
@@ -112,4 +114,4 @@ y_pred_best = best_model.predict(X_test)
 
 print(f'Best classification report:', classification_report(y_test, y_pred_best))
 print(f'Best confusion matrix:', confusion_matrix(y_test, y_pred_best))
-print('Evaluationa & tuning complete')
+print('Evaluation & tuning complete')
